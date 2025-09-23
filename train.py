@@ -31,6 +31,9 @@ def clean_text(text):
         return ""
     text = str(text)
     text = re.sub(r'<[^>]+>', '', text)           # HTML-теги
+    text = re.sub(r'http\S+', '', text)           # Ссылки
+    text = re.sub(r'[“”«»]', '"', text)           # Нормализация кавычек
+    text = re.sub(r'[^\w\s\.\,\!\?\:\;\-\+\"\'\(\)\—]', ' ', text)  # Только базовая пунктуация
     text = re.sub(r'\s+', ' ', text)              # Множественные пробелы
     text = re.sub(r'\?+', '?', text)              # ?? -> ?
     text = re.sub(r'\!+', '!', text)              # !! -> !
@@ -108,9 +111,14 @@ def main():
     print("\n⏬ Загрузка модели и токенизатора...")
     try:
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-        tokenizer.pad_token = tokenizer.eos_token  # Критично для GPT-2
-
+        
+        # Безопасное добавление pad_token
+        if tokenizer.pad_token is None:
+            tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+        
         model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
+        model.resize_token_embeddings(len(tokenizer))  # Важно после добавления токенов!
+        
         print("✅ Модель и токенизатор загружены")
     except Exception as e:
         print(f"❌ Ошибка загрузки модели: {e}")
@@ -121,7 +129,7 @@ def main():
         return tokenizer(
             examples["text"],
             truncation=True,
-            max_length=256,
+            max_length=128,          # Оптимизировано под Q&A
             padding="max_length",
             return_tensors=None,
         )
@@ -141,28 +149,30 @@ def main():
         pad_to_multiple_of=8
     )
 
-    # Параметры обучения
+    # Параметры обучения — оптимизированы под 817 строк
     training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
         overwrite_output_dir=True,
-        num_train_epochs=3,
-        per_device_train_batch_size=4,
-        per_device_eval_batch_size=4,
-        gradient_accumulation_steps=2,
-        learning_rate=3e-5,
-        warmup_steps=200,
+        num_train_epochs=4,                    # Оптимально для малого датасета
+        per_device_train_batch_size=8,         # Увеличено, если GPU позволяет
+        per_device_eval_batch_size=8,
+        gradient_accumulation_steps=2,         # Эффективный batch = 16
+        learning_rate=2e-5,                    # Более консервативный lr
+        warmup_steps=100,                      # Меньше, т.к. данных мало
         weight_decay=0.01,
         logging_dir="./logs",
-        logging_steps=10,
-        save_steps=500,
-        eval_steps=500,
-        eval_strategy="steps",
+        logging_strategy="steps",
+        logging_steps=50,                      # Частое логирование
         save_strategy="steps",
+        save_steps=200,
+        eval_strategy="steps",
+        eval_steps=200,
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
+        save_total_limit=2,                    # Ограничение чекпоинтов
         report_to="none",
-        fp16=torch.cuda.is_available(),  # Авто-включение для GPU
+        fp16=torch.cuda.is_available(),        # Авто-включение для GPU
         dataloader_num_workers=4,
         dataloader_pin_memory=True,
         remove_unused_columns=True,

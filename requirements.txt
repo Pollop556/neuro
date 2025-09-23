@@ -1,5 +1,5 @@
-torch
-transformers
-datasets
 pandas
-numpy
+datasets
+transformers
+torch
+accelerate
