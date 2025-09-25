@@ -18,7 +18,7 @@ import logging
 
 # ==================== КОНФИГУРАЦИЯ ====================
 MODEL_NAME = "ai-forever/rugpt3small_based_on_gpt2"
-CSV_FILE_PATH = "data_shuffled.csv"  # Используем перемешанный файл!
+CSV_FILE_PATH = "data.csv"  # Используем перемешанный файл!
 OUTPUT_DIR = "./my_rugpt3_finetuned"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs("./logs", exist_ok=True)
