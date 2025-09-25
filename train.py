@@ -18,7 +18,7 @@ import logging
 
 # ==================== КОНФИГУРАЦИЯ ====================
 MODEL_NAME = "ai-forever/rugpt3small_based_on_gpt2"
-CSV_FILE_PATH = "data.csv"  # Используем перемешанный файл!
+CSV_FILE_PATH = "data.csv"  # Используем оригинальный файл
 OUTPUT_DIR = "./my_rugpt3_finetuned"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs("./logs", exist_ok=True)
@@ -69,9 +69,8 @@ def load_and_format_data(csv_path):
             header=None,
             names=['question', 'answer'],
             quoting=1,
-            escapechar='\\',
-            on_bad_lines='warn',
-            encoding='utf-8'
+            encoding='utf-8',
+            on_bad_lines='skip'  # Пропускаем проблемные строки
         )
         print(f"✅ Прочитано {len(df)} строк")
         
@@ -121,20 +120,7 @@ def load_and_format_data(csv_path):
         print(f"💡 Рекомендуемый max_length: {int(max_length * 1.2)}")
 
     dataset = Dataset.from_dict({"text": dialog_examples})
-    return dataset.train_test_split(test_size=0.15, seed=42, shuffle=True)  # Увеличили test_size
-
-# ==================== МЕТРИКИ ====================
-def compute_metrics(eval_pred):
-    """Вычисление метрик для оценки"""
-    predictions, labels = eval_pred
-    predictions = np.argmax(predictions, axis=2)
-    
-    # Вычисляем accuracy только для не-pad токенов
-    mask = labels != -100
-    correct = (predictions == labels) & mask
-    accuracy = correct.sum() / mask.sum()
-    
-    return {"accuracy": accuracy}
+    return dataset.train_test_split(test_size=0.15, seed=42, shuffle=True)
 
 # ==================== ОСНОВНОЙ ПРОЦЕСС ====================
 def main():
@@ -155,7 +141,7 @@ def main():
 
     # Анализ средней длины для настройки max_length
     avg_length = calculate_average_length(dataset['train'])
-    max_length = min(512, int(avg_length * 1.5))  # Динамический max_length
+    max_length = min(256, int(avg_length * 1.5))  # Увеличили лимит
     print(f"🔤 Автоматически установлен max_length: {max_length}")
 
     # Загрузка модели и токенизатора
@@ -167,12 +153,12 @@ def main():
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
         
+        # Загружаем модель в правильном формате
         model = AutoModelForCausalLM.from_pretrained(
             MODEL_NAME,
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+            torch_dtype=torch.float32  # Используем float32 для стабильности
         )
         
-        # Не нужно resize_token_embeddings при использовании eos_token как pad_token
         print("✅ Модель и токенизатор загружены")
         print(f"💡 Размер словаря: {len(tokenizer)}")
         
@@ -195,7 +181,7 @@ def main():
     tokenized_datasets = dataset.map(
         tokenize_function,
         batched=True,
-        num_proc=4,
+        num_proc=2,  # Уменьшили для стабильности
         remove_columns=["text"]
     )
 
@@ -206,37 +192,38 @@ def main():
         pad_to_multiple_of=8
     )
 
-    # Оптимизированные параметры обучения для 769 примеров
+    # ОПТИМИЗИРОВАННЫЕ параметры обучения
     training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
         overwrite_output_dir=True,
-        num_train_epochs=3,                    # Уменьшено для предотвращения переобучения
-        per_device_train_batch_size=4,         # Уменьшено для стабильности
-        per_device_eval_batch_size=4,
-        gradient_accumulation_steps=4,         # Увеличено для эффективного batch_size=16
-        learning_rate=3e-5,                    # Слегка увеличенный lr
-        warmup_ratio=0.1,                      # Процент от общего числа шагов
+        num_train_epochs=3,
+        per_device_train_batch_size=2,         # Уменьшили batch_size
+        per_device_eval_batch_size=2,
+        gradient_accumulation_steps=8,         # Увеличили для компенсации
+        learning_rate=2e-5,                    # Вернули оригинальный lr
+        warmup_ratio=0.1,
         weight_decay=0.01,
         logging_dir="./logs",
         logging_strategy="steps",
-        logging_steps=50,
-        save_strategy="epoch",                 # Сохраняем каждую эпоху
-        eval_strategy="epoch",                 # Оцениваем каждую эпоху
+        logging_steps=20,
+        save_strategy="epoch",
+        eval_strategy="epoch",
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
-        save_total_limit=3,                    # Сохраняем 3 лучшие модели
+        save_total_limit=2,
         report_to="none",
-        fp16=torch.cuda.is_available(),
-        dataloader_num_workers=2,              # Уменьшено для стабильности
-        dataloader_pin_memory=True,
+        fp16=False,  # ВЫКЛЮЧИЛИ FP16 для стабильности
+        dataloader_num_workers=1,              # Уменьшили для Colab
+        dataloader_pin_memory=False,           # Выключили для стабильности
         remove_unused_columns=True,
         disable_tqdm=False,
         seed=42,
-        prediction_loss_only=True,             # Только loss для LM
+        prediction_loss_only=True,
+        gradient_checkpointing=True,           # Включили для экономии памяти
     )
 
-    # Trainer с метриками
+    # Trainer
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -244,7 +231,7 @@ def main():
         eval_dataset=tokenized_datasets["test"],
         data_collator=data_collator,
         tokenizer=tokenizer,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]  # Увеличено терпение
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=2)]
     )
 
     # Предварительная оценка до обучения
@@ -280,7 +267,7 @@ def main():
         with torch.no_grad():
             outputs = model.generate(
                 inputs.input_ids,
-                max_length=150,
+                max_length=100,
                 num_return_sequences=1,
                 temperature=0.7,
                 do_sample=True,
