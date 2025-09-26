@@ -1,4 +1,4 @@
-# train.py
+ # train.py
 import pandas as pd
 from datasets import Dataset
 from transformers import (
@@ -196,11 +196,11 @@ def main():
     training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
         overwrite_output_dir=True,
-        num_train_epochs=3,
+        num_train_epochs=5,
         per_device_train_batch_size=2,         # Уменьшили batch_size
         per_device_eval_batch_size=2,
         gradient_accumulation_steps=8,         # Увеличили для компенсации
-        learning_rate=2e-5,                    # Вернули оригинальный lr
+        learning_rate=3e-5,                    # Вернули оригинальный lr
         warmup_ratio=0.1,
         weight_decay=0.01,
         logging_dir="./logs",
